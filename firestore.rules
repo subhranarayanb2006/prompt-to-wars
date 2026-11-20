@@ -1,0 +1,289 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Pillar 0: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Global Hardened Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function parentUserExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId));
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidIata(val) {
+      return val is string && val.size() == 3 && val.matches('^[A-Z]{3}$');
+    }
+
+    function isValidPriority(val) {
+      return val is string && val in ['BALANCED', 'MINIMIZE_STRANDED', 'ZERO_CANCELLATIONS', 'MINIMIZE_DELAY', 'LOW_RESOURCE'];
+    }
+
+    function isValidReason(val) {
+      return val is string && val in ['Thunderstorm', 'Dense Fog', 'Runway Closure', 'ATC Ground Stop'];
+    }
+
+    function isValidStringList(val, maxSize) {
+      return val is list &&
+        val.size() <= maxSize &&
+        (val.size() == 0 || (val[0] is string && val[0].size() >= 1 && val[0].size() <= 120));
+    }
+
+    // --- Entity Validation Blueprints (Anti-Update-Gap) ---
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'callsign', 'homeHub', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'callsign', 'homeHub', 'createdAt', 'updatedAt']) &&
+        isValidId(data.uid) &&
+        data.uid == request.auth.uid &&
+        data.uid == userId &&
+        isValidString(data.displayName, 1, 80) &&
+        isValidString(data.email, 3, 160) &&
+        (!('photoURL' in data) || isValidString(data.photoURL, 0, 500)) &&
+        isValidString(data.callsign, 1, 40) &&
+        isValidIata(data.homeHub) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidWorkspacePreferences(data, userId) {
+      return data.keys().hasAll(['ownerId', 'watchlistIds', 'defaultPriority', 'updatedAt']) &&
+        data.keys().hasOnly(['ownerId', 'watchlistIds', 'defaultPriority', 'updatedAt']) &&
+        isValidId(data.ownerId) &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId == userId &&
+        isValidStringList(data.watchlistIds, 70) &&
+        isValidPriority(data.defaultPriority) &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidSavedScenario(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'title', 'notes', 'airportCode', 'startMin', 'endMin',
+          'reason', 'priority', 'actionIds', 'actionLabels',
+          'baselineStranded', 'afterStranded', 'baselineDelayMin', 'afterDelayMin',
+          'baselineCancelled', 'afterCancelled', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'title', 'notes', 'airportCode', 'startMin', 'endMin',
+          'reason', 'priority', 'actionIds', 'actionLabels',
+          'baselineStranded', 'afterStranded', 'baselineDelayMin', 'afterDelayMin',
+          'baselineCancelled', 'afterCancelled', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.ownerId) &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId == userId &&
+        isValidString(data.title, 1, 100) &&
+        isValidString(data.notes, 0, 500) &&
+        isValidIata(data.airportCode) &&
+        data.startMin is int && data.startMin >= 300 && data.startMin <= 1200 &&
+        data.endMin is int && data.endMin > data.startMin && data.endMin <= 1380 &&
+        isValidReason(data.reason) &&
+        isValidPriority(data.priority) &&
+        isValidStringList(data.actionIds, 15) &&
+        isValidStringList(data.actionLabels, 15) &&
+        data.baselineStranded is int && data.baselineStranded >= 0 && data.baselineStranded <= 50000 &&
+        data.afterStranded is int && data.afterStranded >= 0 && data.afterStranded <= 50000 &&
+        data.baselineDelayMin is int && data.baselineDelayMin >= 0 && data.baselineDelayMin <= 200000 &&
+        data.afterDelayMin is int && data.afterDelayMin >= 0 && data.afterDelayMin <= 200000 &&
+        data.baselineCancelled is int && data.baselineCancelled >= 0 && data.baselineCancelled <= 500 &&
+        data.afterCancelled is int && data.afterCancelled >= 0 && data.afterCancelled <= 500 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidShiftLogEntry(data, userId) {
+      return data.keys().hasAll([
+          'ownerId', 'title', 'notes', 'category', 'severity',
+          'status', 'scenarioRef', 'resolvedNote', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId', 'title', 'notes', 'category', 'severity',
+          'status', 'scenarioRef', 'resolvedNote', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.ownerId) &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId == userId &&
+        isValidString(data.title, 1, 120) &&
+        isValidString(data.notes, 1, 1000) &&
+        data.category is string && data.category in ['INCIDENT', 'RECOVERY', 'CREW_FDTL', 'HANDOVER'] &&
+        data.severity is string && data.severity in ['ROUTINE', 'ADVISORY', 'CRITICAL'] &&
+        data.status is string && data.status in ['open', 'resolved'] &&
+        isValidString(data.scenarioRef, 0, 160) &&
+        isValidString(data.resolvedNote, 0, 400) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // --- Collection 1: /users/{userId} (Strict PII Isolation, Owner-Only) ---
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+
+      allow create: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isOwner(userId) &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          // Action: Update Profile & Callsign Preferences
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'callsign', 'homeHub', 'updatedAt'])
+        );
+
+      allow delete: if false;
+
+      // --- Collection 2: /users/{userId}/preferences/{prefId} ---
+      match /preferences/{prefId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          prefId == 'workspace' &&
+          parentUserExists(userId);
+
+        allow list: if false;
+
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          prefId == 'workspace' &&
+          isValidWorkspacePreferences(incoming(), userId) &&
+          incoming().updatedAt == request.time &&
+          parentUserExists(userId);
+
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          prefId == 'workspace' &&
+          isValidWorkspacePreferences(incoming(), userId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().updatedAt == request.time &&
+          (
+            // Action: Sync Watchlist & Default Priority
+            incoming().diff(existing()).affectedKeys().hasOnly(['watchlistIds', 'defaultPriority', 'updatedAt'])
+          ) &&
+          parentUserExists(userId);
+
+        allow delete: if false;
+      }
+
+      // --- Collection 3: /users/{userId}/scenarios/{scenarioId} ---
+      match /scenarios/{scenarioId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(scenarioId) &&
+          resource.data.ownerId == request.auth.uid &&
+          parentUserExists(userId);
+
+        // Pillar 8: Secure List Query (no get()/exists() inside list)
+        allow list: if isOwner(userId) &&
+          resource.data.ownerId == request.auth.uid;
+
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(scenarioId) &&
+          isValidSavedScenario(incoming(), userId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          parentUserExists(userId);
+
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(scenarioId) &&
+          isValidSavedScenario(incoming(), userId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          (
+            // Action: Rename or Annotate Scenario
+            incoming().diff(existing()).affectedKeys().hasOnly(['title', 'notes', 'updatedAt'])
+          ) &&
+          parentUserExists(userId);
+
+        allow delete: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(scenarioId) &&
+          resource.data.ownerId == request.auth.uid &&
+          parentUserExists(userId);
+      }
+
+      // --- Collection 4: /users/{userId}/logbook/{entryId} ---
+      match /logbook/{entryId} {
+        allow get: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(entryId) &&
+          resource.data.ownerId == request.auth.uid &&
+          parentUserExists(userId);
+
+        // Pillar 8: Secure List Query (no get()/exists() inside list)
+        allow list: if isOwner(userId) &&
+          resource.data.ownerId == request.auth.uid;
+
+        allow create: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(entryId) &&
+          isValidShiftLogEntry(incoming(), userId) &&
+          incoming().status == 'open' &&
+          incoming().resolvedNote == '' &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          parentUserExists(userId);
+
+        allow update: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(entryId) &&
+          isValidShiftLogEntry(incoming(), userId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          // Pillar 6: Terminal State Locking (once resolved, locked forever)
+          existing().status == 'open' &&
+          (
+            // Action: Edit Open Log Entry
+            (incoming().status == 'open' && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'notes', 'severity', 'updatedAt'])) ||
+            // Action: Resolve Log Entry (Terminal Transition)
+            (incoming().status == 'resolved' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'resolvedNote', 'updatedAt']))
+          ) &&
+          parentUserExists(userId);
+
+        allow delete: if isOwner(userId) &&
+          isValidId(userId) &&
+          isValidId(entryId) &&
+          resource.data.ownerId == request.auth.uid &&
+          parentUserExists(userId);
+      }
+    }
+  }
+}

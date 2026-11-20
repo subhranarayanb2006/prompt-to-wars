@@ -1,0 +1,6 @@
+{
+  "name": "Domino Sky",
+  "description": "Interactive airline network delay propagation simulator and AI recovery dispatcher across 16 airports, 70 flights, 16 aircraft, passenger connections, crews, and spare aircraft.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
